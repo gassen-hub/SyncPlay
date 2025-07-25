@@ -4,8 +4,8 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "screenshots")
-public class Screenshot {
+@Table(name = "test_screenshots")
+public class TestScreenshot {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -13,15 +13,18 @@ public class Screenshot {
     @Column(name = "test_result_id", nullable = false)
     private Long testResultId;
 
-    @Column(name = "step_name")
-    private String stepName;
+    @Column(name = "file_path", nullable = false)
+    private String filePath;
 
-    @Column(name = "screenshot_path", nullable = false)
-    private String screenshotPath;
+    @Column(name = "file_name", nullable = false)
+    private String fileName;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "screenshot_type", nullable = false)
     private ScreenshotType screenshotType;
+
+    @Column(name = "step_name")
+    private String stepName;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
@@ -32,13 +35,15 @@ public class Screenshot {
     }
 
     // Constructors
-    public Screenshot() {}
+    public TestScreenshot() {}
 
-    public Screenshot(Long testResultId, String stepName, String screenshotPath, ScreenshotType screenshotType) {
+    public TestScreenshot(Long testResultId, String filePath, String fileName,
+                          ScreenshotType screenshotType, String stepName) {
         this.testResultId = testResultId;
-        this.stepName = stepName;
-        this.screenshotPath = screenshotPath;
+        this.filePath = filePath;
+        this.fileName = fileName;
         this.screenshotType = screenshotType;
+        this.stepName = stepName;
     }
 
     // Getters and Setters
@@ -48,16 +53,18 @@ public class Screenshot {
     public Long getTestResultId() { return testResultId; }
     public void setTestResultId(Long testResultId) { this.testResultId = testResultId; }
 
-    public String getStepName() { return stepName; }
-    public void setStepName(String stepName) { this.stepName = stepName; }
+    public String getFilePath() { return filePath; }
+    public void setFilePath(String filePath) { this.filePath = filePath; }
 
-    public String getScreenshotPath() { return screenshotPath; }
-    public void setScreenshotPath(String screenshotPath) { this.screenshotPath = screenshotPath; }
+    public String getFileName() { return fileName; }
+    public void setFileName(String fileName) { this.fileName = fileName; }
 
     public ScreenshotType getScreenshotType() { return screenshotType; }
     public void setScreenshotType(ScreenshotType screenshotType) { this.screenshotType = screenshotType; }
 
+    public String getStepName() { return stepName; }
+    public void setStepName(String stepName) { this.stepName = stepName; }
+
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }
-

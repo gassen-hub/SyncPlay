@@ -1,161 +1,567 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Client } from '@stomp/stompjs';
 import {
+  ArrowLeft,
   Play,
   Square,
   RefreshCw,
   Terminal,
-  Eye,
-  Clock,
+  Bug,
+  AlertCircle,
   CheckCircle,
   XCircle,
-  AlertCircle,
-  ArrowLeft,
-  ExternalLink,
-  Pause,
-  Bug,
+  Clock,
+  Eye,
+  EyeOff,
+  Monitor,
   Activity,
-  Monitor
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 
-const DebugExecution = ({ testCase, debugSession, isDarkMode, onBack }) => {
-  const [sessionData, setSessionData] = useState(debugSession);
-  const [logs, setLogs] = useState([]);
-  const [currentStep, setCurrentStep] = useState(null);
-  const [status, setStatus] = useState('starting');
-  const [connecting, setConnecting] = useState(false);
-  const [inspectorUrl, setInspectorUrl] = useState(null);
-  const [sessionId, setSessionId] = useState(null);
-  const wsRef = useRef(null);
-  const logsEndRef = useRef(null);
-  const statusPollRef = useRef(null);
+const DebugExecution = ({ testCase, onBack, isDarkMode }) => {
+  const [debugSession, setDebugSession] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [sessionStatus, setSessionStatus] = useState('IDLE');
+  const [showConsole, setShowConsole] = useState(true);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const messagesEndRef = useRef(null);
+  const stompClientRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
 
   useEffect(() => {
-    if (debugSession) {
-      setSessionId(debugSession.sessionId);
-      setInspectorUrl(debugSession.inspectorUrl);
-      setStatus('running');
-
-      // Connect WebSocket for real-time updates
-      connectWebSocket(debugSession.sessionId);
-      // Poll status
-      startStatusPolling(debugSession.sessionId);
-    }
-
+    // Start debug session when component mounts
+    startDebugSession();
+    
+    // Cleanup on unmount
     return () => {
-      wsRef.current?.close();
-      clearInterval(statusPollRef.current);
+      cleanup();
     };
-  }, [debugSession]);
+  }, [testCase.id]);
 
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+    // Auto-scroll to bottom when new messages arrive
+    if (autoScroll && messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, autoScroll]);
 
-  const connectWebSocket = sessionId => { /* ...existing implementation... */ };
-  const startStatusPolling = sessionId => { /* ...existing implementation... */ };
-  const stopDebugExecution = async () => { /* ...existing implementation... */ };
-  const openInspector = () => {
-    if (inspectorUrl) {
-      window.open(inspectorUrl, '_blank', 'width=1200,height=800');
+  const cleanup = () => {
+    if (debugSession) {
+      stopDebugSession();
+    }
+    if (stompClientRef.current) {
+      stompClientRef.current.deactivate();
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
     }
   };
-  const getStatusColor = status => { /* ...existing implementation... */ };
-  const getStatusIcon = status => { /* ...existing implementation... */ };
-  const getLogTypeColor = type => { /* ...existing implementation... */ };
-  const formatTimestamp = timestamp => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString();
+
+  const startDebugSession = async () => {
+    try {
+      setSessionStatus('STARTING');
+      addMessage('STATUS', 'Starting debug session...', 'INFO');
+      
+      // Call Spring Boot backend to start debug session
+      const response = await fetch('http://localhost:8075/api/debug/start/' + testCase.id, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to start debug session: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.sessionId) {
+        const session = {
+          sessionId: result.sessionId,
+          testcaseId: testCase.id,
+          startTime: new Date().toISOString(),
+          websocketTopic: result.websocketTopic
+        };
+        
+        setDebugSession(session);
+        
+        // Connect to WebSocket after session is created
+        await connectWebSocket(session.sessionId);
+        
+        addMessage('STATUS', result.message || 'Debug session started successfully', 'INFO');
+        setSessionStatus('RUNNING');
+      } else {
+        throw new Error('No session ID received from server');
+      }
+      
+    } catch (error) {
+      console.error('Error starting debug session:', error);
+      addMessage('ERROR', 'Failed to start debug session: ' + error.message, 'ERROR');
+      setSessionStatus('ERROR');
+    }
+  };
+
+  const connectWebSocket = async (sessionId) => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Use native WebSocket instead of SockJS
+        const stompClient = new Client({
+          brokerURL: 'ws://localhost:8075/ws-debug',
+          connectHeaders: {},
+          debug: function (str) {
+            console.log('STOMP: ' + str);
+          },
+          reconnectDelay: 5000,
+          heartbeatIncoming: 4000,
+          heartbeatOutgoing: 4000,
+        });
+
+        stompClient.onConnect = (frame) => {
+          console.log('Connected: ' + frame);
+          setIsConnected(true);
+          
+          // Subscribe to debug session topic
+          stompClient.subscribe(`/topic/debug/${sessionId}`, (message) => {
+            const debugMessage = JSON.parse(message.body);
+            handleDebugMessage(debugMessage);
+          });
+          
+          addMessage('STATUS', 'Connected to debug session', 'INFO');
+          setSessionStatus('CONNECTED');
+          resolve();
+        };
+
+        stompClient.onStompError = (frame) => {
+          console.error('Broker reported error: ' + frame.headers['message']);
+          console.error('Additional details: ' + frame.body);
+          setIsConnected(false);
+          setSessionStatus('ERROR');
+          addMessage('ERROR', 'STOMP connection error', 'ERROR');
+          reject(new Error('STOMP connection error'));
+        };
+
+        stompClient.onWebSocketClose = (event) => {
+          console.log('WebSocket disconnected:', event.code, event.reason);
+          setIsConnected(false);
+          
+          if (sessionStatus !== 'STOPPED' && sessionStatus !== 'COMPLETED') {
+            setSessionStatus('DISCONNECTED');
+            addMessage('WARN', 'WebSocket connection lost. Attempting to reconnect...', 'WARN');
+            
+            // Attempt to reconnect
+            reconnectTimeoutRef.current = setTimeout(() => {
+              if (debugSession) {
+                connectWebSocket(debugSession.sessionId);
+              }
+            }, 3000);
+          }
+        };
+
+        stompClient.onWebSocketError = (error) => {
+          console.error('WebSocket error:', error);
+          setIsConnected(false);
+          setSessionStatus('ERROR');
+          addMessage('ERROR', 'WebSocket connection error', 'ERROR');
+          reject(error);
+        };
+        
+        stompClientRef.current = stompClient;
+        stompClient.activate();
+        
+        // Timeout for connection
+        setTimeout(() => {
+          if (!stompClient.connected) {
+            stompClient.deactivate();
+            reject(new Error('WebSocket connection timeout'));
+          }
+        }, 10000);
+        
+      } catch (error) {
+        console.error('Error connecting to WebSocket:', error);
+        setSessionStatus('ERROR');
+        reject(error);
+      }
+    });
+  };
+
+  const handleDebugMessage = (message) => {
+    console.log('Received debug message:', message);
+    
+    // Handle different message formats
+    if (typeof message === 'string') {
+      // Plain text message
+      addMessage('CONSOLE_LOG', message, 'INFO');
+    } else if (message.type && message.message) {
+      // Structured message from Spring Boot
+      addMessage(message.type, message.message, message.level || 'INFO', message.data);
+      
+      // Update session status based on message type and content
+      if (message.type === 'STATUS') {
+        if (message.message.includes('completed successfully')) {
+          setSessionStatus('COMPLETED');
+        } else if (message.message.includes('failed') || message.message.includes('error')) {
+          setSessionStatus('FAILED');
+        } else if (message.message.includes('stopped')) {
+          setSessionStatus('STOPPED');
+        } else if (message.message.includes('Starting') || message.message.includes('Running')) {
+          setSessionStatus('RUNNING');
+        }
+      } else if (message.type === 'ERROR') {
+        setSessionStatus('FAILED');
+      }
+    } else {
+      // Unknown message format, display as is
+      addMessage('CONSOLE_LOG', JSON.stringify(message), 'INFO');
+    }
+  };
+
+  const addMessage = (type, message, level, data = null) => {
+    const newMessage = {
+      id: Date.now() + Math.random(),
+      type,
+      message,
+      level,
+      data,
+      timestamp: new Date().toISOString()
+    };
+    
+    setMessages(prev => [...prev, newMessage]);
+    
+    // Log to console for debugging
+    console.log(`[${type}] ${message}`);
+  };
+
+  const stopDebugSession = async () => {
+    if (!debugSession) return;
+    
+    try {
+      setSessionStatus('STOPPING');
+      addMessage('STATUS', 'Stopping debug session...', 'INFO');
+      
+      // Disconnect WebSocket first
+      if (stompClientRef.current) {
+        stompClientRef.current.deactivate();
+        setIsConnected(false);
+      }
+      
+      // Call Spring Boot backend to stop debug session
+      const response = await fetch(`http://localhost:8075/api/debug/stop/${debugSession.sessionId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to stop debug session: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.message) {
+        addMessage('STATUS', result.message, 'INFO');
+        setSessionStatus('STOPPED');
+      } else {
+        throw new Error('Failed to stop debug session');
+      }
+      
+    } catch (error) {
+      console.error('Error stopping debug session:', error);
+      addMessage('ERROR', 'Failed to stop debug session: ' + error.message, 'ERROR');
+    }
+  };
+
+  const restartDebugSession = async () => {
+    if (debugSession) {
+      await stopDebugSession();
+      // Wait a moment before restarting
+      setTimeout(() => {
+        startDebugSession();
+      }, 1000);
+    } else {
+      startDebugSession();
+    }
+  };
+
+  const clearMessages = () => {
+    setMessages([]);
+    addMessage('STATUS', 'Console cleared', 'INFO');
+  };
+
+  const getStatusIcon = () => {
+    switch (sessionStatus) {
+      case 'IDLE':
+        return <Monitor className="w-5 h-5 text-gray-500" />;
+      case 'STARTING':
+      case 'CONNECTED':
+        return <Activity className="w-5 h-5 text-blue-500 animate-pulse" />;
+      case 'RUNNING':
+        return <Play className="w-5 h-5 text-green-500" />;
+      case 'COMPLETED':
+        return <CheckCircle className="w-5 h-5 text-green-500" />;
+      case 'FAILED':
+        return <XCircle className="w-5 h-5 text-red-500" />;
+      case 'STOPPED':
+        return <Square className="w-5 h-5 text-gray-500" />;
+      case 'ERROR':
+        return <AlertCircle className="w-5 h-5 text-red-500" />;
+      case 'DISCONNECTED':
+        return <WifiOff className="w-5 h-5 text-orange-500" />;
+      default:
+        return <Bug className="w-5 h-5 text-gray-500" />;
+    }
+  };
+
+  const getStatusColor = () => {
+    switch (sessionStatus) {
+      case 'RUNNING':
+        return 'text-green-600';
+      case 'COMPLETED':
+        return 'text-green-600';
+      case 'FAILED':
+      case 'ERROR':
+        return 'text-red-600';
+      case 'STOPPED':
+        return 'text-gray-600';
+      case 'DISCONNECTED':
+        return 'text-orange-600';
+      case 'STARTING':
+      case 'CONNECTED':
+        return 'text-blue-600';
+      default:
+        return 'text-gray-600';
+    }
+  };
+
+  const getMessageIcon = (type, level) => {
+    if (type === 'BROWSER_ACTION') {
+      return <Monitor className="w-4 h-4 text-blue-500" />;
+    } else if (type === 'TEST_RESULT') {
+      return level === 'ERROR' ? 
+        <XCircle className="w-4 h-4 text-red-500" /> : 
+        <CheckCircle className="w-4 h-4 text-green-500" />;
+    } else if (type === 'CONSOLE_LOG') {
+      return <Terminal className="w-4 h-4 text-purple-500" />;
+    } else if (type === 'ERROR') {
+      return <AlertCircle className="w-4 h-4 text-red-500" />;
+    } else if (type === 'STATUS') {
+      return <Activity className="w-4 h-4 text-blue-500" />;
+    } else {
+      return <Bug className="w-4 h-4 text-gray-500" />;
+    }
+  };
+
+  const getMessageColor = (level) => {
+    switch (level) {
+      case 'ERROR':
+        return 'text-red-600';
+      case 'WARN':
+        return 'text-orange-600';
+      case 'INFO':
+        return 'text-blue-600';
+      default:
+        return 'text-gray-600';
+    }
+  };
+
+  const formatTimestamp = (timestamp) => {
+    return new Date(timestamp).toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      fractionalSecondDigits: 3
+    });
   };
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>      
+    <div className={`min-h-screen ${isDarkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
       {/* Header */}
-      <div className={`${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b px-6 py-4`}>  
+      <div className={`${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b px-6 py-4`}>
         <div className="flex items-center justify-between">
-          {/* Back and Title */}
           <div className="flex items-center space-x-4">
-            <button onClick={onBack} className="flex items-center px-3 py-2 text-gray-600 hover:text-gray-900 transition-colors">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Tests
+            <button
+              onClick={onBack}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
+                isDarkMode 
+                  ? 'text-gray-300 hover:bg-gray-700' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <ArrowLeft className="w-5 h-5" />
+              <span>Back</span>
             </button>
-            <div className="border-l border-gray-300 pl-4">
-              <h1 className="text-xl font-semibold flex items-center">
-                <Bug className="w-5 h-5 mr-2 text-purple-600" />
-                Debug Execution
-              </h1>
-              <p className="text-sm text-gray-500 mt-1">{testCase.name}</p>
-            </div>
-          </div>
-
-          {/* Controls */}
-          <div className="flex items-center space-x-3">
-            {/* Status Badge */}
-            <div className={`flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(status)}`}>
-              {getStatusIcon(status)}
-              <span className="ml-2 capitalize">{status}</span>
-            </div>
-            {/* Inspector Button */}
-            {(status === 'running' || status === 'starting') && inspectorUrl && (
-              <button onClick={openInspector} className="flex items-center px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-md">
-                <Monitor className="w-4 h-4 mr-2" />
-                Open Inspector<ExternalLink className="w-3 h-3 ml-1" />
-              </button>
-            )}
-            {/* Stop Button */}
-            {(status === 'running' || status === 'starting') && (
-              <button onClick={stopDebugExecution} className="flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-md">
-                <Square className="w-4 h-4 mr-2" /> Stop
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex h-[calc(100vh-64px)]">
-        {/* Left Panel: Test Details */}
-        <div className={`w-1/3 ${isDarkMode ? 'bg-gray-800' : 'bg-white'} border-r p-6 overflow-y-auto`}>          
-          <h2 className="text-lg font-semibold mb-4 flex items-center">
-            <Activity className="w-5 h-5 mr-2 text-blue-500" /> Test Details
-          </h2>
-          <div className="space-y-4 text-sm">
-            <div>
-              <label className="font-medium text-gray-700">Session ID</label>
-              <p className="mt-1 font-mono text-gray-900 dark:text-gray-200 text-xs">{sessionId || 'Not started'}</p>
-            </div>
-            <div>
-              <label className="font-medium text-gray-700">Current Step</label>
-              <p className="mt-1 text-gray-900 dark:text-gray-200">{currentStep || 'Waiting...'}</p>
-            </div>
-            {testCase.steps?.length > 0 && (
+            
+            <div className="flex items-center space-x-3">
+              {getStatusIcon()}
               <div>
-                <label className="font-medium text-gray-700">Test Steps</label>
-                <ul className="mt-1 list-disc list-inside space-y-1">
-                  {testCase.steps.map((step, idx) => (
-                    <li key={idx} className="text-gray-700 dark:text-gray-300">{step}</li>
-                  ))}
-                </ul>
+                <h1 className={`text-xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  Debug Execution
+                </h1>
+                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                  {testCase.name}
+                </p>
               </div>
-            )}
+            </div>
           </div>
-        </div>
-
-        {/* Right Panel: Logs */}
-        <div className="w-2/3 p-6 overflow-y-auto">
-          <h2 className="text-lg font-semibold mb-4 flex items-center">
-            <Terminal className="w-5 h-5 mr-2 text-green-500" /> Logs
-          </h2>
-          <div className="h-full overflow-y-auto bg-gray-50 dark:bg-gray-800 p-4 rounded-lg">
-            {logs.map((log, idx) => (
-              <div key={idx} className={`mb-2 text-sm ${getLogTypeColor(log.type)}`}>                
-                <span className="font-mono text-xs mr-2">{formatTimestamp(log.timestamp)}</span>
-                {log.message}
-              </div>
-            ))}
-            <div ref={logsEndRef} />
+          
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2">
+              {isConnected ? (
+                <Wifi className="w-5 h-5 text-green-500" />
+              ) : (
+                <WifiOff className="w-5 h-5 text-red-500" />
+              )}
+              <span className={`text-sm font-medium ${getStatusColor()}`}>
+                {sessionStatus}
+              </span>
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={restartDebugSession}
+                disabled={sessionStatus === 'RUNNING' || sessionStatus === 'STARTING'}
+                className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
+                  sessionStatus === 'RUNNING' || sessionStatus === 'STARTING'
+                    ? 'opacity-50 cursor-not-allowed'
+                    : isDarkMode 
+                      ? 'text-blue-400 hover:bg-gray-700' 
+                      : 'text-blue-600 hover:bg-blue-50'
+                }`}
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Restart</span>
+              </button>
+              
+              <button
+                onClick={stopDebugSession}
+                disabled={sessionStatus !== 'RUNNING'}
+                className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
+                  sessionStatus !== 'RUNNING'
+                    ? 'opacity-50 cursor-not-allowed'
+                    : isDarkMode 
+                      ? 'text-red-400 hover:bg-gray-700' 
+                      : 'text-red-600 hover:bg-red-50'
+                }`}
+              >
+                <Square className="w-4 h-4" />
+                <span>Stop</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Console Controls */}
+      <div className={`${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b px-6 py-3`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={() => setShowConsole(!showConsole)}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
+                isDarkMode 
+                  ? 'text-gray-300 hover:bg-gray-700' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {showConsole ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              <span>Console</span>
+            </button>
+            
+            <button
+              onClick={clearMessages}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
+                isDarkMode 
+                  ? 'text-gray-300 hover:bg-gray-700' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Terminal className="w-4 h-4" />
+              <span>Clear</span>
+            </button>
+          </div>
+          
+          <div className="flex items-center space-x-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={(e) => setAutoScroll(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                Auto-scroll
+              </span>
+            </label>
+            
+            <div className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              {messages.length} messages
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Console Output */}
+      {showConsole && (
+        <div className={`flex-1 ${isDarkMode ? 'bg-gray-900' : 'bg-gray-50'} p-6`}>
+          <div className={`${isDarkMode ? 'bg-black border-gray-700' : 'bg-white border-gray-200'} border rounded-lg h-[calc(100vh-200px)] flex flex-col`}>
+            {/* Console Header */}
+            <div className={`${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-100 border-gray-200'} border-b px-4 py-3 flex items-center justify-between`}>
+              <div className="flex items-center space-x-2">
+                <Terminal className={`w-5 h-5 ${isDarkMode ? 'text-green-400' : 'text-green-600'}`} />
+                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  Debug Console
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                  {isConnected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+            </div>
+            
+            {/* Console Messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2 font-mono text-sm">
+              {messages.length === 0 ? (
+                <div className={`text-center py-8 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                  <Terminal className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>No console output yet. Start debugging to see messages.</p>
+                </div>
+              ) : (
+                messages.map((msg) => (
+                  <div key={msg.id} className={`flex items-start space-x-3 py-1 ${
+                    isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}>
+                    <span className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} mt-1`}>
+                      {formatTimestamp(msg.timestamp)}
+                    </span>
+                    <div className="flex-shrink-0 mt-1">
+                      {getMessageIcon(msg.type, msg.level)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className={`break-words ${getMessageColor(msg.level)}`}>
+                        {msg.message}
+                      </div>
+                      {msg.data && (
+                        <div className={`mt-1 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                          <pre className="whitespace-pre-wrap">
+                            {typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

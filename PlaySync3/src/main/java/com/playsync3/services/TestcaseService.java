@@ -28,7 +28,7 @@ public class TestcaseService {
     @Autowired
     private GeneratedScriptRepository generatedScriptRepository;
 
-    private static final String NODE_JS_BACKEND_PATH = "C:\\Users\\big97\\OneDrive\\Documents\\PFE\\playsync testingbackend";
+    private static final String NODE_JS_BACKEND_PATH = "C:\\Users\\big97\\OneDrive\\Documents\\PFE\\SyncPlay\\playsync testingbackend";
     private static final String TEST_FILES_DIR = NODE_JS_BACKEND_PATH + "\\test-files";
 
     public List<TestcaseDTO> getAllTestcases() {

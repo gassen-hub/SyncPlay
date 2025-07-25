@@ -22,7 +22,9 @@ public class SecurityConfig {
                                 "/api/scripts/**",
                                 "/api/schedules/**",
                                 "/api/debug/**",
-                                "/api/results/**"
+                                "/api/results/**",
+                                "/api/dashboard/**",
+                                "/api/screenshots/**"
                         ).permitAll()
 
                         // Permit native WS and SockJS endpoints

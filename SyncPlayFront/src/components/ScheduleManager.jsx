@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Play, Pause, Plus, Edit2, Trash2, Mail, History, AlertCircle, CheckCircle, XCircle, Filter, Search } from 'lucide-react';
+import { Calendar, Clock, Play, Pause, Plus, Edit2, Trash2, Mail, History, AlertCircle, CheckCircle, XCircle, Filter, Search, X } from 'lucide-react';
 
 const ScheduleManager = () => {
   const [schedules, setSchedules] = useState([]);
@@ -7,9 +7,12 @@ const ScheduleManager = () => {
   const [selectedSchedule, setSelectedSchedule] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showScriptModal, setShowScriptModal] = useState(false);
   const [scheduleHistory, setScheduleHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [scriptSearchTerm, setScriptSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [currentDate, setCurrentDate] = useState(new Date());
 
@@ -37,30 +40,61 @@ const ScheduleManager = () => {
   const fetchSchedules = async () => {
     try {
       const response = await fetch(`${API_BASE}/schedules`);
+      if (!response.ok) throw new Error('Failed to fetch schedules');
       const data = await response.json();
       setSchedules(data);
     } catch (error) {
       console.error('Error fetching schedules:', error);
+      setError('Failed to load schedules. Please try again.');
     }
   };
 
   const fetchScripts = async () => {
     try {
-      const response = await fetch(`${API_BASE}/scripts`);
-      const data = await response.json();
-      setScripts(data);
+      // Fetch all test cases
+      const testcaseResponse = await fetch(`${API_BASE}/testcases`);
+      if (!testcaseResponse.ok) throw new Error('Failed to fetch test cases');
+      const testcases = await testcaseResponse.json();
+
+      // Fetch scripts for each test case
+      const scriptPromises = testcases.map(async (testcase) => {
+        try {
+          const scriptResponse = await fetch(`${API_BASE}/testcases/${testcase.id}/script`);
+          if (scriptResponse.ok) {
+            const script = await scriptResponse.json();
+            return {
+              id: script.id,
+              fileName: script.fileName,
+              testcaseName: testcase.name,
+              description: testcase.description
+            };
+          }
+          return null;
+        } catch (error) {
+          console.error(`Error fetching script for testcase ${testcase.id}:`, error);
+          return null;
+        }
+      });
+
+      const scripts = (await Promise.all(scriptPromises)).filter(script => script !== null);
+      setScripts(scripts);
+      setError(null);
     } catch (error) {
       console.error('Error fetching scripts:', error);
+      setError('Failed to load scripts. Please try again.');
+      setScripts([]);
     }
   };
 
   const fetchScheduleHistory = async (scheduleId) => {
     try {
       const response = await fetch(`${API_BASE}/schedules/${scheduleId}/history`);
+      if (!response.ok) throw new Error('Failed to fetch schedule history');
       const data = await response.json();
       setScheduleHistory(data);
     } catch (error) {
       console.error('Error fetching schedule history:', error);
+      setError('Failed to load schedule history.');
     }
   };
 
@@ -175,6 +209,27 @@ const ScheduleManager = () => {
     setShowHistoryModal(true);
   };
 
+  const handleScriptSelect = (script) => {
+    setFormData({
+      ...formData,
+      scriptId: script.id,
+      name: formData.name || `${script.testcaseName} Schedule`
+    });
+    setShowScriptModal(false);
+    setScriptSearchTerm('');
+  };
+
+  const getSelectedScript = () => {
+    return scripts.find(script => script.id === formData.scriptId);
+  };
+
+  const filteredScripts = scripts.filter(script => {
+    const searchLower = scriptSearchTerm.toLowerCase();
+    return script.fileName.toLowerCase().includes(searchLower) ||
+           script.testcaseName.toLowerCase().includes(searchLower) ||
+           (script.description && script.description.toLowerCase().includes(searchLower));
+  });
+
   const getStatusIcon = (status) => {
     switch (status) {
       case 'ACTIVE': return <CheckCircle className="w-5 h-5 text-green-500" />;
@@ -260,10 +315,15 @@ const ScheduleManager = () => {
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Test Schedule Manager</h1>
-          <p className="text-gray-600">Manage and monitor your automated test schedules</p>
-        </div>
+    
+
+        {/* Error Message */}
+        {error && (
+          <div className="mb-6 p-4 bg-red-100 text-red-700 rounded-lg flex items-center gap-2">
+            <AlertCircle className="w-5 h-5" />
+            <span>{error}</span>
+          </div>
+        )}
 
         {/* Action Bar */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
@@ -449,9 +509,83 @@ const ScheduleManager = () => {
           </div>
         </div>
 
+        {/* Script Selection Modal */}
+        {showScriptModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-200">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Select Test Script</h3>
+                  <button
+                    onClick={() => {
+                      setShowScriptModal(false);
+                      setScriptSearchTerm('');
+                    }}
+                    className="text-gray-500 hover:text-gray-700"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+                
+                <div className="mt-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search scripts by name, test case, or description..."
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      value={scriptSearchTerm}
+                      onChange={(e) => setScriptSearchTerm(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="p-6">
+                {scripts.length === 0 && !scriptSearchTerm && (
+                  <div className="text-center py-8">
+                    <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                    <p className="text-gray-500">No scripts available. Create a test case first.</p>
+                  </div>
+                )}
+                {filteredScripts.length === 0 && scriptSearchTerm && (
+                  <div className="text-center py-8">
+                    <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                    <p className="text-gray-500">No scripts found matching your search</p>
+                  </div>
+                )}
+                {filteredScripts.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[500px] overflow-y-auto">
+                    {filteredScripts.map((script) => (
+                      <div
+                        key={script.id}
+                        className="border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition-colors"
+                        onClick={() => handleScriptSelect(script)}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-900 mb-1">{script.fileName}</h4>
+                            <p className="text-sm text-blue-600 mb-2">{script.testcaseName}</p>
+                            {script.description && (
+                              <p className="text-xs text-gray-500">{script.description}</p>
+                            )}
+                          </div>
+                          <div className="ml-4 text-gray-400">
+                            →
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Create/Edit Schedule Modal */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-40">
             <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-900">
@@ -465,19 +599,25 @@ const ScheduleManager = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Test Script *
                     </label>
-                    <select
-                      required
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      value={formData.scriptId}
-                      onChange={(e) => setFormData({...formData, scriptId: e.target.value})}
-                    >
-                      <option value="">Select Script</option>
-                      {scripts.map((script) => (
-                        <option key={script.id} value={script.id}>
-                          {script.fileName} - {script.testcaseName}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-500"
+                        value={getSelectedScript()?.fileName || 'No script selected'}
+                        placeholder="Click to select script"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowScriptModal(true)}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                      >
+                        Select
+                      </button>
+                    </div>
+                    {getSelectedScript() && (
+                      <p className="text-xs text-gray-500 mt-1">{getSelectedScript().testcaseName}</p>
+                    )}
                   </div>
                   
                   <div>
@@ -633,7 +773,7 @@ const ScheduleManager = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || !formData.scriptId}
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                   >
                     {loading ? 'Saving...' : selectedSchedule ? 'Update' : 'Create'}
@@ -715,23 +855,19 @@ const ScheduleManager = () => {
               </div>
               
               <div className="p-6 border-t border-gray-200 flex justify-end">
-                  <button
-                    onClick={() => setShowHistoryModal(false)}
-                    className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
-                  >
-                    Close
-                  </button>
-                </div>
+                <button
+                  onClick={() => setShowHistoryModal(false)}
+                  className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Close
+                </button>
               </div>
-              
-            </div> )}
-        </div>
-        
-
+            </div>
+          </div>
+        )}
       </div>
-      
-    );
+    </div>
+  );
 };
 
 export default ScheduleManager;
-              

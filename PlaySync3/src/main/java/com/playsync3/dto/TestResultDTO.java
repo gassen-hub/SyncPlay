@@ -2,6 +2,11 @@ package com.playsync3.dto;
 
 import com.playsync3.entities.TestStatus;
 import java.time.LocalDateTime;
+import java.util.List;
+
+import com.playsync3.entities.TestStatus;
+import java.time.LocalDateTime;
+import java.util.List;
 
 public class TestResultDTO {
     private Long id;
@@ -10,6 +15,7 @@ public class TestResultDTO {
     private String output;
     private Long executionTime;
     private LocalDateTime createdAt;
+    private List<TestScreenshotDTO> screenshots; // Add this field
 
     // Constructors
     public TestResultDTO() {}
@@ -32,4 +38,7 @@ public class TestResultDTO {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public List<TestScreenshotDTO> getScreenshots() { return screenshots; }
+    public void setScreenshots(List<TestScreenshotDTO> screenshots) { this.screenshots = screenshots; }
 }

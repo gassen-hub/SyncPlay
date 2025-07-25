@@ -29,7 +29,7 @@ public class GeneratedScriptService {
     @Autowired
     private LMStudioService lmStudioService;
 
-    private static final String NODE_JS_BACKEND_PATH = "C:\\Users\\big97\\OneDrive\\Documents\\PFE\\playsync testingbackend";
+    private static final String NODE_JS_BACKEND_PATH = "C:\\Users\\big97\\OneDrive\\Documents\\PFE\\SyncPlay\\playsync testingbackend";
     private static final String GENERATED_TESTS_DIR = NODE_JS_BACKEND_PATH + "\\generated-tests";
 
     public GeneratedScriptDTO generateScript(Long testcaseId) throws IOException {
